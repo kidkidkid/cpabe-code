@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/fentec-project/gofe/abe"
+	"github.com/golang/protobuf/ptypes/timestamp"
 	"github.com/hyperledger/fabric-chaincode-go/shim"
 	"github.com/hyperledger/fabric-protos-go/peer"
 	"hash/fnv"
@@ -81,11 +82,28 @@ func (t *OwnChaincode) Invoke(stub shim.ChaincodeStubInterface) peer.Response {
 	}
 }
 
+type auditHistory struct {
+	Audit     string               `json:"audit"`
+	TimeStamp *timestamp.Timestamp `json:"time_stamp"`
+	TxId      string               `json:"tx_id"`
+}
+
 func (t *OwnChaincode) getAudit(stub shim.ChaincodeStubInterface, params []string) ([]byte, error) {
 	if len(params) != 1 {
 		return nil, errors.New("Need one file id")
 	}
-	data, _ := stub.GetState(params[0])
+	history, _ := stub.GetHistoryForKey(params[0])
+	var ret []auditHistory
+	for history.HasNext() {
+		data, _ := history.Next()
+		record := auditHistory{
+			Audit:     string(data.Value),
+			TimeStamp: data.Timestamp,
+			TxId:      data.TxId,
+		}
+		ret = append(ret, record)
+	}
+	data, _ := json.Marshal(ret)
 	return data, nil
 }
 
@@ -120,18 +138,7 @@ func (t *OwnChaincode) decrypt(stub shim.ChaincodeStubInterface, params []string
 	fileId := params[1]
 	userId := params[2]
 	defer func() {
-		data, _ := stub.GetState(fileId)
-		var arr []Behaviour
-		_ = json.Unmarshal(data, &arr)
-		arr = append(arr, Behaviour{
-			Id:     userId,
-			Result: success,
-		})
-		data, err := json.Marshal(arr)
-		if err != nil {
-			return
-		}
-		_ = stub.PutState(fileId, data)
+		_ = stub.PutState(fileId, []byte(fmt.Sprintf("%s-%t", userId, success)))
 	}()
 	attrs := params[3:]
 	attrInt := make([]int, len(attrs))
